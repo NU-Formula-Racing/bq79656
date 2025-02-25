@@ -4,7 +4,7 @@
 #include <cmath>
 
 #include "Crc16.h"
-// #define serialdebug 1
+#define serialdebug 0
 
 Crc16 crc;
 
@@ -492,21 +492,20 @@ bool BQ79656::RunOpenWireCheck()
     // The Main ADC is running in continuous mode
 
     // Configure the open wire detection threshold through DIAG_COMP_CTRL2[OW_THR3:0]
-    data_arr_[0] = 0x0 | 6;  // 6*300mv+500mv=2.3v threshold
+    data_arr_[0] = 0x0 | 3;  // 6*300mv+500mv=2.3v threshold
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::DIAG_COMP_CTRL2, data_arr_);
-
     // To start the open wire comparison
     // Turn on the VC pins current sink or source through DIAG_COMP_CTRL3[OW_SNK1:0]
     data_arr_[0] = 0b00010000;
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::DIAG_COMP_CTRL3, data_arr_);
+    
 
     // Wait for dV/dt time to deplete capacitors
-    delay(3);  // depletes 0.47uf at 380ua minimum, 808V/s, will deplete to at most 1.776V
+    delay(3);  // 3 // depletes 0.47uf at 380ua minimum, 808V/s, will deplete to at most 1.776V
 
-    // For VC open wire detection, select DIAG_COMP_CTRL3[COMP_ADC_SEL2:0] = OW VC check (0b010) and set COMP_ADC_GO=1
+    // For V_CTRL3[COMP_ADCC open wire detection, select DIAG_COMP_SEL2:0] = OW VC check (0b010) and set COMP_ADC_GO=1
     data_arr_[0] = 0b00010101;  // leave current sinks on
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::DIAG_COMP_CTRL3, data_arr_);
-
     // Device runs comparisons
     // Wait for comparison completed, ADC_STAT2[DRDY_VCOW]=1
     std::vector<bool> complete_segments(kNumSegments, false);
@@ -517,23 +516,24 @@ bool BQ79656::RunOpenWireCheck()
         complete = true;
         for (int i = 0; i < kNumSegments; i++)
         {
-            complete_segments[i] = complete_segments[i] | (bq_response_buffers_[stack_size_ - i - 1][0] & 0b00001000);
+            complete_segments[i] = complete_segments[i] | ( (bq_response_buffers_[stack_size_ - i - 1][4]) & 0b00001000); //0b00001000
             complete &= complete_segments[i];
         }
     }
-
-    // Host then turns of all current sinks and sources through DIAG_COMP_CTRL3[OW_SNK1:0]
+    // Host then turns off all current sinks and sources through DIAG_COMP_CTRL3[OW_SNK1:0]
     data_arr_[0] = 0b00000000;
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::DIAG_COMP_CTRL3, data_arr_);
 
     // Host checks the FAULT_COMP_VCOW1/2 registers for comparison result
     // Just check fault summary
     // May not be needed, can return void and let nfault trigger interrupt
+   
     ReadReg(RequestType::STACK_READ, 0, RegisterAddress::FAULT_SUMMARY, 1);
+    
     bool ow_fault = false;
     for (int i = 0; i < kNumSegments; i++)
     {
-        ow_fault |= bq_response_buffers_[stack_size_ - i - 1][0] & 0b01000000;
+        ow_fault |= bq_response_buffers_[stack_size_ - i - 1][4] & 0b01000000;
     }
     return ow_fault;
 }
@@ -663,3 +663,4 @@ void BQ79656::CommClear()
     // delayMicroseconds((10000 + 600) * num_segments); //(10ms shutdown to active transition + 600us propogation of
     // wake) * number_of_devices
 }
+
