@@ -22,12 +22,12 @@ static uint8_t bq_uart_tx_buffer[kAdditionalBufferSize] = {0};
 class BQ79656
 {
 public:
-    BQ79656(HardwareSerial &uart,
+    BQ79656(HardwareSerialIMXRT &uart,
             uint8_t tx_pin,
             IThermistor &thermistor,
             uint16_t num_cells_series = 140,
             uint16_t num_thermistors = 112,
-            uint16_t num_segments = 14,
+            uint16_t num_segments = 5,
             float shunt_resistance = 0.0001f)
         : uart_{uart},
           tx_pin_{tx_pin},
@@ -415,7 +415,7 @@ private:
 #ifdef BQTEST
 private:
 #endif
-    HardwareSerial &uart_;
+    HardwareSerialIMXRT &uart_;
     uint8_t tx_pin_;
     IThermistor &thermistor_;
     std::vector<byte> data_arr_;

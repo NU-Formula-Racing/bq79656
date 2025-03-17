@@ -4,7 +4,7 @@
 #include <cmath>
 
 #include "Crc16.h"
-#define serialdebug 0
+//#define serialdebug 1
 
 Crc16 crc;
 
@@ -116,7 +116,7 @@ void BQ79656::SetProtectors(float ov_thresh, float uv_thresh, float ot_thresh, f
     delay(5);
 
     StartOVUV();
-    //  StartOTUT(); TODO
+    StartOTUT(); //TODO
 }
 
 /**
@@ -384,6 +384,7 @@ void BQ79656::ProcessBalancing(std::vector<float> voltages, float max_charge_vol
     static constexpr float balancing_threshold{0.01};
     if (max_voltage - min_voltage < balancing_threshold && max_voltage <= max_charge_voltage)
     {
+        Serial.println("Returned");
         return;
     }
     // Find all cell voltages above threshold over min voltage, set balance timers for whichever is worse of even/odd
@@ -424,10 +425,27 @@ void BQ79656::ProcessBalancing(std::vector<float> voltages, float max_charge_vol
             }
         }
     }
-
+    Serial.println("Balancing end voltage");
     // set balancing end voltage
     data_arr_[0] = 0x3F;
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::VCB_DONE_THRESH, data_arr_);
+
+    SetAllDataArrValues(0);
+    Serial.println("Start Balancing");
+    // start balancing with FLTSTOP_EN to stop on fault, OTCB_EN to pause on overtemp, AUTO_BAL to automatically cycle
+    // between even/odd
+    data_arr_[0] = 0b00110010;
+    Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::BAL_CTRL2, data_arr_);
+    
+    SetAllDataArrValues(0);
+
+    Serial.println("Read CB Data");
+    //Reads the CB Data From Cell Balancing, 0 means still running or not started, 1 means completed
+    ReadReg(RequestType::STACK_READ, 0, RegisterAddress::CB_COMPLETE1, 1);
+   
+    //Reads the CB Data From Cell Balancing, 0 means still running or not started, 1 means completed
+    ReadReg(RequestType::STACK_READ, 0, RegisterAddress::CB_COMPLETE2, 1);
+
 }
 
 /**
@@ -451,7 +469,7 @@ void BQ79656::StopBalancing()
          static_cast<RegisterAddress>(static_cast<uint16_t>(RegisterAddress::CB_CELL1_CTRL) + (seriesPerSegment / 2) + 1
                                       - seriesPerSegment),
          balTimes);
-    data_arr_[0] = 0b00110011;  // write BAL_GO to process registers
+    data_arr_[0] = 0b00000000;  // write BAL_GO to process registers
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::BAL_CTRL2, data_arr_);
 
     // clear OV faults
@@ -490,9 +508,9 @@ bool BQ79656::RunOpenWireCheck()
 {
     // Before starting the open wire detection, the host ensures
     // The Main ADC is running in continuous mode
-
+    Serial.println("open wire check-----------------");
     // Configure the open wire detection threshold through DIAG_COMP_CTRL2[OW_THR3:0]
-    data_arr_[0] = 0x0 | 3;  // 6*300mv+500mv=2.3v threshold
+    data_arr_[0] = 0x0 | 0;  // 6*300mv+500mv=2.3v threshold
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::DIAG_COMP_CTRL2, data_arr_);
     // To start the open wire comparison
     // Turn on the VC pins current sink or source through DIAG_COMP_CTRL3[OW_SNK1:0]
@@ -501,7 +519,7 @@ bool BQ79656::RunOpenWireCheck()
     
 
     // Wait for dV/dt time to deplete capacitors
-    delay(3);  // 3 // depletes 0.47uf at 380ua minimum, 808V/s, will deplete to at most 1.776V
+    delay(5);  // 3 // depletes 0.47uf at 380ua minimum, 808V/s, will deplete to at most 1.776V
 
     // For V_CTRL3[COMP_ADCC open wire detection, select DIAG_COMP_SEL2:0] = OW VC check (0b010) and set COMP_ADC_GO=1
     data_arr_[0] = 0b00010101;  // leave current sinks on
@@ -523,11 +541,15 @@ bool BQ79656::RunOpenWireCheck()
     // Host then turns off all current sinks and sources through DIAG_COMP_CTRL3[OW_SNK1:0]
     data_arr_[0] = 0b00000000;
     Comm(RequestType::STACK_WRITE, 1, 0, RegisterAddress::DIAG_COMP_CTRL3, data_arr_);
+    
 
-    // Host checks the FAULT_COMP_VCOW1/2 registers for comparison result
+
+    // Host checks the FAULT_COMP_VCOW1/2 registers for comparison result for debugging
+    ReadReg(RequestType::STACK_READ, 0, RegisterAddress::FAULT_COMP_VCOW1, 1);
+    ReadReg(RequestType::STACK_READ, 0, RegisterAddress::FAULT_COMP_VCOW2, 1);
     // Just check fault summary
     // May not be needed, can return void and let nfault trigger interrupt
-   
+   Serial.println("reading fault summary");
     ReadReg(RequestType::STACK_READ, 0, RegisterAddress::FAULT_SUMMARY, 1);
     
     bool ow_fault = false;
@@ -579,14 +601,18 @@ void BQ79656::GetVoltages(std::vector<float> &voltages)
  */
 void BQ79656::GetTemps(std::vector<float> &temps)
 {
+    // setting CONTROL2[TSREF_EN] TO 1 
+    //DELAY FOR 3
+
     // read temps from battery
     int thermoPerSegment = kNumThermistors / kNumSegments;
+    Serial.println("Reading thermistor temperature");
     ReadReg(RequestType::STACK_READ,
             0,
             static_cast<RegisterAddress>(static_cast<uint16_t>(RegisterAddress::GPIO1_HI) - 1),
             thermoPerSegment * 2);
-
-    // fill in kNumThermistors temperatures to array
+    
+    // fill in kNumThermistors tewddmperatures to array
     for (int i = 0; i < stack_size_; i++)
     {
         for (int j = 0; j < thermoPerSegment; j++)
@@ -594,7 +620,9 @@ void BQ79656::GetTemps(std::vector<float> &temps)
             int16_t temp;
             ((uint8_t *)&temp)[0] = bq_response_buffers_[stack_size_ - i - 1][(2 * j) + 4];
             ((uint8_t *)&temp)[1] = bq_response_buffers_[stack_size_ - i - 1][(2 * j) + 5];
-            temps[(i * thermoPerSegment) + j] = thermistor_.VoltageToTemperature(temp * BQ_V_LSB_GPIO);
+            
+            temps[(i * thermoPerSegment) + j] = thermistor_.VoltageToTemperature(temp  * BQ_V_LSB_GPIO);
+            //Serial.println(temps[(i * thermoPerSegment) + j]);
         }
     }
     return;
@@ -663,4 +691,3 @@ void BQ79656::CommClear()
     // delayMicroseconds((10000 + 600) * num_segments); //(10ms shutdown to active transition + 600us propogation of
     // wake) * number_of_devices
 }
-
